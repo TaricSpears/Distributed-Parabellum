@@ -1,6 +1,7 @@
 package it.unibo.parabellum
 package view
 
+import protocol.FriendsSnapshot
 import session.{GameSession, LoginExpired, OnlineAccount, OnlineSessions, SessionFactory}
 import snapshot.{CircleSnapshot, GameSnapshot, ObstacleSnapshot, PolygonSnapshot, PowerUpSnapshot, ShapeSnapshot}
 import util.BoundingBox
@@ -41,6 +42,9 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
 
   /** The user that is logged in on a server, if any: he stays logged in between the matches. */
   private var account: Option[OnlineAccount] = None
+
+  /** The last friends snapshot loaded for the logged-in user. */
+  private var friendsState: FriendsSnapshot = FriendsSnapshot.Empty
 
   /** The server of the last login, suggested for the next one. */
   private var lastServer: String = "127.0.0.1:8080"
@@ -92,6 +96,33 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
     def startShootingRange(): Unit =
       enterGame(sessions.shootingRange(this))
 
+    /** Reloads the friends list and pending requests from the server. */
+    def refreshFriends(afterMessage: Option[String] = None): Unit =
+      account.foreach: user =>
+        online.friends(user).onComplete: result =>
+          Platform.runLater(() => {
+            if account.contains(user) then
+              result match
+                case Success(snapshot) =>
+                  friendsState = snapshot
+                  menuView.showFriends(snapshot)
+                  afterMessage.foreach(menuView.showMessage)
+                case Failure(error: LoginExpired) => loginExpired(error)
+                case Failure(error) => menuView.showMessage(error.getMessage)
+          })
+
+    def runFriendAction(action: OnlineAccount => Future[Unit], okMessage: String): Unit =
+      account.foreach: user =>
+        menuView.setBusy(true)
+        action(user).onComplete: result =>
+          Platform.runLater(() => {
+            menuView.setBusy(false)
+            result match
+              case Success(_) => refreshFriends(Some(okMessage))
+              case Failure(error: LoginExpired) => loginExpired(error)
+              case Failure(error) => menuView.showMessage(error.getMessage)
+          })
+
     /** Waits for a login (or a registration followed by a login): if it works the user is logged in. */
     def awaitLogin(server: String, attempt: Future[OnlineAccount], welcome: String): Unit =
       menuView.setBusy(true)
@@ -101,9 +132,12 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
           result match
             case Success(user) =>
               account = Some(user)
+              friendsState = FriendsSnapshot.Empty
               lastServer = server
               menuView.showLoggedIn(user)
+              menuView.showFriends(friendsState)
               menuView.showMessage(welcome)
+              refreshFriends()
             case Failure(error) => menuView.showMessage(error.getMessage)
         })
 
@@ -116,6 +150,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
 
     def logOut(): Unit =
       account = None
+      friendsState = FriendsSnapshot.Empty
       menuView.showLoggedOut()
 
     /** Goes back to the main menu because the login is not valid any more. */
@@ -141,9 +176,13 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       account.foreach: user =>
         lazy val onlineView: OnlineView = new OnlineView(
           user,
+          friendsState.friends,
           matchId => playOnline(onlineView, online.join(user, matchId, this)),
           (matchId, others, soldiers) => playOnline(onlineView, online.create(user, matchId, others, soldiers, this)),
-          () => stage.scene = menuScene
+          () => {
+            stage.scene = menuScene
+            refreshFriends()
+          }
         )
         stage.scene = new Scene(windowSize.width, windowSize.height):
           fill = White
@@ -156,7 +195,12 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       (server, username, password) => logIn(server, username, password),
       (server, username, password) => registerAccount(server, username, password),
       () => logOut(),
+      () => refreshFriends(Some("")),
+      target => runFriendAction(online.sendFriendRequest(_, target), s"Friend request sent to $target"),
+      from => runFriendAction(online.acceptFriendRequest(_, from), s"You and $from are now friends"),
+      from => runFriendAction(online.declineFriendRequest(_, from), s"Declined request from $from"),
       account,
+      friendsState,
       lastServer
     )
 
@@ -168,6 +212,8 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       title = "Parabellum"
       resizable = false
       scene = menuScene
+
+    if account.isDefined then refreshFriends()
 
   /**
    * Overrides the current scene to display the end-game screen.
@@ -276,14 +322,16 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       snapshot.soldiers.foreach: soldier =>
         val tc = GeometryHelper.transform(soldier.pos)
 
-        playerViews.get(soldier.name) match
-          case Some(view) =>
-            view.setPosition(tc.x, tc.y)
-            view.setHighlight(soldier.name == snapshot.turn.soldier)
-          case None =>
-            val newView = new PlayerView(soldier.name, tc.x, tc.y, GeometryHelper.transform(soldier.radius), teamIndexOf(soldier.owner, snapshot))
-            playerViews += (soldier.name -> newView)
-            gameView.addElements(newView)
+        val view = playerViews.getOrElse(
+          soldier.name, {
+            val nv = new PlayerView(soldier.name, tc.x, tc.y, GeometryHelper.transform(soldier.radius), teamIndexOf(soldier.owner, snapshot))
+            playerViews += (soldier.name -> nv)
+            gameView.addElements(nv)
+            nv
+          }
+        )
+        view.setPosition(tc.x, tc.y)
+        view.setHighlight(soldier.name == snapshot.turn.soldier)
 
       val currentSoldierNames = snapshot.soldiers.map(_.name)
       playerViews = removeStaleViews(currentSoldierNames, playerViews)

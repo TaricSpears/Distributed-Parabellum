@@ -57,7 +57,7 @@ class PlayerView(playerName: String, initialX: Double, initialY: Double, shapeRa
 
   def setHighlight(isShooting: Boolean): Unit =
     ring.stroke = if isShooting then Yellow else White
-    ring.strokeWidth = if isShooting then 4.0 else 2.0
+    ring.strokeWidth = if isShooting then 5.0 else 2.0
 
 object PlayerView:
 

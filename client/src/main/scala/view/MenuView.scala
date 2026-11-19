@@ -1,12 +1,13 @@
 package it.unibo.parabellum
 package view
 
-import protocol.AccountRules
+import protocol.{AccountRules, FriendsSnapshot}
 import session.OnlineAccount
 import util.{MapGenerator, PlayerNames}
 import scalafx.scene.Node
-import scalafx.scene.layout.{BorderPane, HBox, Region, StackPane, VBox}
-import scalafx.scene.control.{Button, Label, PasswordField, TextField, TextInputControl, Tooltip}
+import scalafx.scene.layout.{BorderPane, HBox, Priority, Region, StackPane, VBox}
+import scalafx.scene.control.{Button, Label, PasswordField, ScrollPane, TextField, TextInputControl, Tooltip}
+import scalafx.scene.control.ScrollPane.ScrollBarPolicy
 import scalafx.geometry.{Insets, Pos}
 import scalafx.scene.image.{Image, ImageView}
 
@@ -16,17 +17,7 @@ import scalafx.scene.image.{Image, ImageView}
  * to [[MapGenerator.MaxPlayers]]), customize their names and the number of soldiers per team.
  *
  * On the side there is the account of the user on a server: he logs in (or registers) here, and only
- * then he can play online. Once he is logged in, he can log out from here too.
- *
- * @param onPlayClicked Callback function executed when the "Play" button is clicked.
- *                      It provides the names of the players, in turn order, and the number of soldiers per team.
- * @param onShootingRangeClicked Callback function executed when the "Shooting range" button is clicked.
- * @param onOnlineClicked Callback function executed when the "Play online" button is clicked.
- * @param onLogin    Callback executed to log in. It provides the server, the username and the password.
- * @param onRegister Callback executed to create an account. It provides the server, the username and the password.
- * @param onLogout   Callback executed to log out.
- * @param account    The user that is logged in, if any.
- * @param server     The server to suggest for the login.
+ * then he can play online. Once he is logged in, he can log out and manage his friends from here too.
  */
 class MenuView(
     onPlayClicked: (Seq[String], Int) => Unit,
@@ -35,7 +26,12 @@ class MenuView(
     onLogin: (String, String, String) => Unit,
     onRegister: (String, String, String) => Unit,
     onLogout: () => Unit,
+    onRefreshFriends: () => Unit,
+    onSendFriendRequest: String => Unit,
+    onAcceptFriendRequest: String => Unit,
+    onDeclineFriendRequest: String => Unit,
     account: Option[OnlineAccount],
+    friends: FriendsSnapshot,
     server: String
 ) extends StackPane:
   private val backgroundUrl = getClass.getResource("/GameMenu.jpeg")
@@ -123,15 +119,25 @@ class MenuView(
     spacing = 12
     children = layoutNodes
 
-  // ---------------------------------------------------------------- account
+  // ---------------------------------------------------------------- account & friends
 
-  private val panelStyle = "-fx-background-color: rgba(0, 0, 0, 0.6); -fx-background-radius: 12;"
-  private val panelTitleStyle = "-fx-text-fill: white; -fx-font-size: 18pt; -fx-font-weight: bold;"
+  private val panelStyle = "-fx-background-color: rgba(0, 0, 0, 0.65); -fx-background-radius: 12;"
+  private val panelTitleStyle = "-fx-text-fill: white; -fx-font-size: 16pt; -fx-font-weight: bold;"
+  private val sectionLabelStyle = "-fx-text-fill: #f0c040; -fx-font-size: 11pt; -fx-font-weight: bold;"
   private val panelLabelStyle = "-fx-text-fill: white; -fx-font-size: 12pt; -fx-font-weight: bold;"
-  private val panelTextStyle = "-fx-text-fill: white; -fx-font-size: 13pt;"
-  private val panelButtonStyle = "-fx-font-size: 13pt; -fx-font-weight: bold; -fx-padding: 6 16 6 16; -fx-cursor: hand;"
+  private val panelTextStyle = "-fx-text-fill: white; -fx-font-size: 12pt;"
+  private val mutedTextStyle = "-fx-text-fill: #cccccc; -fx-font-size: 11pt;"
+  private val panelButtonStyle = "-fx-font-size: 12pt; -fx-font-weight: bold; -fx-padding: 5 14 5 14; -fx-cursor: hand;"
+  private val smallButtonStyle = "-fx-font-size: 11pt; -fx-font-weight: bold; -fx-padding: 3 8 3 8; -fx-cursor: hand;"
+  private val acceptButtonStyle = s"$smallButtonStyle -fx-background-color: #4caf50; -fx-text-fill: white;"
+  private val declineButtonStyle = s"$smallButtonStyle -fx-background-color: #e53935; -fx-text-fill: white;"
   private val messageStyle = "-fx-text-fill: #ffd54f; -fx-font-size: 11pt; -fx-font-weight: bold;"
-  private val fieldWidth = 220
+  private val panelWidth = 264
+  private val fieldWidth = panelWidth - 28
+
+  private def spacer(): Region =
+    new Region:
+      hgrow = Priority.Always
 
   private val serverField = new TextField:
     text = server
@@ -146,6 +152,8 @@ class MenuView(
     style = messageStyle
     wrapText = true
     maxWidth = fieldWidth
+    visible = false
+    managed = false
 
   private val loginButton = new Button("Login"):
     style = panelButtonStyle
@@ -156,13 +164,38 @@ class MenuView(
     onAction = _ => registerPressed()
 
   private val logoutButton = new Button("Logout"):
-    style = panelButtonStyle
+    style = smallButtonStyle
     onAction = _ => onLogout()
 
-  private val loggedInLabel = new Label(""):
-    style = panelTextStyle
-    wrapText = true
-    maxWidth = fieldWidth
+  private val loggedInUserLabel = new Label(""):
+    style = panelLabelStyle
+
+  private val loggedInServerLabel = new Label(""):
+    style = mutedTextStyle
+
+  private val addFriendField = new TextField:
+    promptText = "Add friend..."
+    hgrow = Priority.Always
+    onAction = _ => addFriendPressed()
+
+  private val addFriendButton = new Button("Add"):
+    style = smallButtonStyle
+    onAction = _ => addFriendPressed()
+
+  private val refreshFriendsButton = new Button("↻"):
+    style = smallButtonStyle
+    tooltip = Tooltip("Refresh friends")
+    onAction = _ => onRefreshFriends()
+
+  private val friendsListBox = new VBox:
+    spacing = 6
+
+  private val friendsScroll = new ScrollPane:
+    content = friendsListBox
+    fitToWidth = true
+    maxHeight = 280
+    hbarPolicy = ScrollBarPolicy.Never
+    style = "-fx-background: transparent; -fx-background-color: transparent;"
 
   private def field(labelText: String, input: TextInputControl): VBox =
     new VBox:
@@ -185,14 +218,44 @@ class MenuView(
     messageLabel
   )
 
-  private val loggedInNodes: List[Node] = List(panelTitle, loggedInLabel, logoutButton, messageLabel)
+  private val loggedInInfo = new VBox:
+    spacing = 1
+    children = List[Node](loggedInUserLabel, loggedInServerLabel)
+
+  private val loggedInHeader = new HBox:
+    alignment = Pos.CenterLeft
+    spacing = 8
+    children = List[Node](loggedInInfo, spacer(), logoutButton)
+
+  private val friendsHeader = new HBox:
+    alignment = Pos.CenterLeft
+    spacing = 8
+    children = List[Node](
+      new Label("Friends") { style = panelTitleStyle },
+      spacer(),
+      refreshFriendsButton
+    )
+
+  private val addFriendRow = new HBox:
+    alignment = Pos.CenterLeft
+    spacing = 6
+    children = List[Node](addFriendField, addFriendButton)
+
+  private val loggedInNodes: List[Node] = List(
+    loggedInHeader,
+    friendsHeader,
+    addFriendRow,
+    messageLabel,
+    friendsScroll
+  )
 
   private val accountPanel = new VBox:
     spacing = 10
-    padding = Insets(16)
+    padding = Insets(14)
     alignment = Pos.TopLeft
     style = panelStyle
-    prefWidth = fieldWidth + 32
+    prefWidth = panelWidth
+    maxWidth = panelWidth
     maxHeight = Region.USE_PREF_SIZE
 
   /** The server and the credentials, if they make sense. */
@@ -216,9 +279,57 @@ class MenuView(
         showMessage("")
         action(address, username, password)
 
-  /** Shows that a user is logged in: he can log out and play online. */
+  private def addFriendPressed(): Unit =
+    val target = AccountRules.normalize(addFriendField.text.value)
+    if !AccountRules.isValidUsername(target) then showMessage(s"Invalid username: ${AccountRules.UsernameRule}")
+    else
+      showMessage("")
+      addFriendField.text = ""
+      onSendFriendRequest(target)
+
+  private def incomingRow(from: String): HBox =
+    val accept = new Button("✓"):
+      style = acceptButtonStyle
+      tooltip = Tooltip(s"Accept $from")
+      onAction = _ => onAcceptFriendRequest(from)
+    val decline = new Button("✗"):
+      style = declineButtonStyle
+      tooltip = Tooltip(s"Decline $from")
+      onAction = _ => onDeclineFriendRequest(from)
+    new HBox:
+      alignment = Pos.CenterLeft
+      spacing = 4
+      children = List[Node](
+        new Label(from) { style = panelTextStyle },
+        spacer(),
+        accept,
+        decline
+      )
+
+  /** Updates the friends list and pending requests shown in the account panel. */
+  def showFriends(snapshot: FriendsSnapshot): Unit =
+    val nodes = scala.collection.mutable.ListBuffer.empty[Node]
+
+    if snapshot.incoming.nonEmpty then
+      nodes += new Label(s"Incoming requests (${snapshot.incoming.size})") { style = sectionLabelStyle }
+      snapshot.incoming.foreach(from => nodes += incomingRow(from))
+
+    nodes += new Label(s"Your friends (${snapshot.friends.size})") { style = sectionLabelStyle }
+    if snapshot.friends.isEmpty then
+      nodes += new Label("No friends yet") { style = mutedTextStyle }
+    else
+      snapshot.friends.foreach(name => nodes += new Label(s"• $name") { style = panelTextStyle })
+
+    if snapshot.outgoing.nonEmpty then
+      nodes += new Label(s"Sent requests (${snapshot.outgoing.size})") { style = sectionLabelStyle }
+      snapshot.outgoing.foreach(to => nodes += new Label(s"• $to (pending)") { style = mutedTextStyle })
+
+    friendsListBox.children = nodes.toList
+
+  /** Shows that a user is logged in: he can log out, manage friends, and play online. */
   def showLoggedIn(account: OnlineAccount): Unit =
-    loggedInLabel.text = s"Logged in as ${account.username}\non ${account.server}"
+    loggedInUserLabel.text = account.username
+    loggedInServerLabel.text = account.server
     passwordField.text = ""
     accountPanel.children = loggedInNodes
     onlineButton.disable = false
@@ -226,6 +337,7 @@ class MenuView(
 
   /** Shows that nobody is logged in: he can log in or register, but not play online. */
   def showLoggedOut(): Unit =
+    showFriends(FriendsSnapshot.Empty)
     accountPanel.children = loggedOutNodes
     onlineButton.disable = true
     onlineButton.tooltip = Tooltip("Log in to play online")
@@ -233,23 +345,30 @@ class MenuView(
   /** Shows a message to the user, for example why the login failed. An empty message removes it. */
   def showMessage(message: String): Unit =
     messageLabel.text = message
+    val hasText = message.nonEmpty
+    messageLabel.visible = hasText
+    messageLabel.managed = hasText
 
   /** While the client is talking to the server the buttons are disabled, so that nothing is done twice. */
   def setBusy(busy: Boolean): Unit =
     loginButton.disable = busy
     registerButton.disable = busy
     logoutButton.disable = busy
-    messageLabel.text = if busy then "Connecting..." else ""
+    addFriendButton.disable = busy
+    refreshFriendsButton.disable = busy
+    showMessage(if busy then "Connecting..." else "")
 
   account match
-    case Some(user) => showLoggedIn(user)
+    case Some(user) =>
+      showLoggedIn(user)
+      showFriends(friends)
     case None => showLoggedOut()
 
-  private val content = new BorderPane:
+  private val layoutPane = new BorderPane:
     center = menuLayout
     right = accountPanel
     padding = Insets(20)
 
   BorderPane.setAlignment(accountPanel, Pos.TopRight)
 
-  children = List(backgroundView, content)
+  children = List(backgroundView, layoutPane)
