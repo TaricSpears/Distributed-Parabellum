@@ -1,7 +1,7 @@
 package it.unibo.parabellum
 package view
 
-import protocol.{AccountRules, FriendsSnapshot}
+import protocol.{AccountRules, DirectMessage, FriendsSnapshot}
 import session.OnlineAccount
 import util.{MapGenerator, PlayerNames}
 import scalafx.scene.Node
@@ -30,6 +30,8 @@ class MenuView(
     onSendFriendRequest: String => Unit,
     onAcceptFriendRequest: String => Unit,
     onDeclineFriendRequest: String => Unit,
+    onOpenFriendChat: String => Unit,
+    onSendDirectMessage: (String, String) => Unit,
     account: Option[OnlineAccount],
     friends: FriendsSnapshot,
     server: String
@@ -241,12 +243,63 @@ class MenuView(
     spacing = 6
     children = List[Node](addFriendField, addFriendButton)
 
+  private var currentFriendsSnapshot: FriendsSnapshot = friends
+  private var activeChatFriend: Option[String] = None
+  private var unreadByFriend: Map[String, Int] = Map.empty
+
+  private val chatBackButton = new Button("←"):
+    style = smallButtonStyle
+    tooltip = Tooltip("Back to friends")
+    onAction = _ => closeFriendChat()
+
+  private val chatTitleLabel = new Label(""):
+    style = panelLabelStyle
+
+  private val chatHeader = new HBox:
+    alignment = Pos.CenterLeft
+    spacing = 8
+    children = List[Node](chatBackButton, chatTitleLabel)
+
+  private val friendChatBox = new VBox:
+    spacing = 4
+    padding = Insets(4)
+
+  private val friendChatScroll = new ScrollPane:
+    content = friendChatBox
+    fitToWidth = true
+    prefHeight = 240
+    maxHeight = 240
+    hbarPolicy = ScrollBarPolicy.Never
+    style = "-fx-background: transparent; -fx-background-color: transparent;"
+
+  private val friendChatInput = new TextField:
+    promptText = "Message..."
+    hgrow = Priority.Always
+    onAction = _ => sendFriendMessagePressed()
+
+  private val friendChatSendButton = new Button("Send"):
+    style = smallButtonStyle
+    onAction = _ => sendFriendMessagePressed()
+
+  private val friendChatInputRow = new HBox:
+    alignment = Pos.CenterLeft
+    spacing = 6
+    children = List[Node](friendChatInput, friendChatSendButton)
+
   private val loggedInNodes: List[Node] = List(
     loggedInHeader,
     friendsHeader,
     addFriendRow,
     messageLabel,
     friendsScroll
+  )
+
+  private val friendChatNodes: List[Node] = List(
+    loggedInHeader,
+    chatHeader,
+    messageLabel,
+    friendChatScroll,
+    friendChatInputRow
   )
 
   private val accountPanel = new VBox:
@@ -306,8 +359,78 @@ class MenuView(
         decline
       )
 
+  private def friendRow(name: String): HBox =
+    val unread = unreadByFriend.getOrElse(name, 0)
+    val chatBtn = new Button(if unread > 0 then s"💬 ($unread)" else "💬"):
+      style =
+        if unread > 0 then s"$smallButtonStyle -fx-background-color: #f0c040; -fx-text-fill: black;"
+        else smallButtonStyle
+      tooltip = Tooltip(s"Chat with $name")
+      onAction = _ => openFriendChat(name)
+    new HBox:
+      alignment = Pos.CenterLeft
+      spacing = 4
+      children = List[Node](
+        new Label(name) { style = panelTextStyle },
+        spacer(),
+        chatBtn
+      )
+
+  private def openFriendChat(friend: String): Unit =
+    activeChatFriend = Some(friend)
+    unreadByFriend -= friend
+    chatTitleLabel.text = s"Chat: $friend"
+    friendChatBox.children = List[Node](new Label("Loading...") { style = mutedTextStyle })
+    showMessage("")
+    accountPanel.children = friendChatNodes
+    onOpenFriendChat(friend)
+
+  private def closeFriendChat(): Unit =
+    activeChatFriend = None
+    showMessage("")
+    accountPanel.children = loggedInNodes
+    showFriends(currentFriendsSnapshot)
+
+  private def sendFriendMessagePressed(): Unit =
+    activeChatFriend.foreach: friend =>
+      val text = friendChatInput.text.value.trim
+      if text.nonEmpty then
+        friendChatInput.clear()
+        onSendDirectMessage(friend, text)
+
+  private def messageNode(dm: DirectMessage): Label =
+    val isMine = dm.from == loggedInUserLabel.text.value
+    new Label(if isMine then s"You: ${dm.text}" else s"${dm.from}: ${dm.text}"):
+      style = if isMine then "-fx-text-fill: #80d8ff; -fx-font-size: 11pt;" else "-fx-text-fill: white; -fx-font-size: 11pt;"
+      wrapText = true
+      maxWidth = fieldWidth - 16
+
+  /** Displays the full chat history with `friend` if that conversation is currently open. */
+  def showChatHistory(friend: String, messages: Seq[DirectMessage]): Unit =
+    if activeChatFriend.contains(friend) then
+      if messages.isEmpty then
+        friendChatBox.children = List[Node](new Label("No messages yet. Say hi!") { style = mutedTextStyle })
+      else
+        friendChatBox.children = messages.map(messageNode).toList
+      friendChatScroll.vvalue = 1.0
+
+  /** Appends a newly sent or received direct message, or updates the unread badge if that chat is closed. */
+  def onDirectMessage(dm: DirectMessage): Unit =
+    val me = loggedInUserLabel.text.value
+    val partner = if dm.from == me then dm.to else dm.from
+    if activeChatFriend.contains(partner) then
+      if friendChatBox.children.size == 1 && friendChatBox.children.head.isInstanceOf[javafx.scene.control.Label] &&
+        friendChatBox.children.head.asInstanceOf[javafx.scene.control.Label].getText == "No messages yet. Say hi!"
+      then friendChatBox.children.clear()
+      friendChatBox.children.add(messageNode(dm).delegate)
+      friendChatScroll.vvalue = 1.0
+    else if dm.from != me then
+      unreadByFriend = unreadByFriend.updated(dm.from, unreadByFriend.getOrElse(dm.from, 0) + 1)
+      showFriends(currentFriendsSnapshot)
+
   /** Updates the friends list and pending requests shown in the account panel. */
   def showFriends(snapshot: FriendsSnapshot): Unit =
+    currentFriendsSnapshot = snapshot
     val nodes = scala.collection.mutable.ListBuffer.empty[Node]
 
     if snapshot.incoming.nonEmpty then
@@ -318,7 +441,7 @@ class MenuView(
     if snapshot.friends.isEmpty then
       nodes += new Label("No friends yet") { style = mutedTextStyle }
     else
-      snapshot.friends.foreach(name => nodes += new Label(s"• $name") { style = panelTextStyle })
+      snapshot.friends.foreach(name => nodes += friendRow(name))
 
     if snapshot.outgoing.nonEmpty then
       nodes += new Label(s"Sent requests (${snapshot.outgoing.size})") { style = sectionLabelStyle }
@@ -331,12 +454,15 @@ class MenuView(
     loggedInUserLabel.text = account.username
     loggedInServerLabel.text = account.server
     passwordField.text = ""
+    activeChatFriend = None
     accountPanel.children = loggedInNodes
     onlineButton.disable = false
     onlineButton.tooltip = null
 
   /** Shows that nobody is logged in: he can log in or register, but not play online. */
   def showLoggedOut(): Unit =
+    activeChatFriend = None
+    unreadByFriend = Map.empty
     showFriends(FriendsSnapshot.Empty)
     accountPanel.children = loggedOutNodes
     onlineButton.disable = true

@@ -13,4 +13,7 @@ trait View:
   /** Tells the user that something he did was not valid, e.g. a function that cannot be parsed. */
   def showError(message: String): Unit
 
+  /** Displays a chat message sent in the current match. */
+  def showChatMessage(sender: String, text: String): Unit = ()
+
   def start(): Unit

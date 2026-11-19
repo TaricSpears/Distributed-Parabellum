@@ -1,7 +1,7 @@
 package it.unibo.parabellum
 package view
 
-import protocol.FriendsSnapshot
+import protocol.{DirectMessageEvent, FriendsChanged, FriendsSnapshot, UserEvent}
 import session.{GameSession, LoginExpired, OnlineAccount, OnlineSessions, SessionFactory}
 import snapshot.{CircleSnapshot, GameSnapshot, ObstacleSnapshot, PolygonSnapshot, PowerUpSnapshot, ShapeSnapshot}
 import util.BoundingBox
@@ -46,6 +46,9 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
   /** The last friends snapshot loaded for the logged-in user. */
   private var friendsState: FriendsSnapshot = FriendsSnapshot.Empty
 
+  /** Active real-time event stream for the logged-in user, if any. */
+  private var eventsSubscription: Option[AutoCloseable] = None
+
   /** The server of the last login, suggested for the next one. */
   private var lastServer: String = "127.0.0.1:8080"
 
@@ -84,17 +87,37 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       root = rootPane
 
     /** Shows the battlefield and plays the session. */
-    def enterGame(session: GameSession): Unit =
+    def enterGame(session: GameSession, onlineMatch: Boolean): Unit =
       currentSession = Some(session)
+      gameView.setChatEnabled(onlineMatch, text => currentSession.foreach(_.sendChat(text)))
       stage.scene = gameScene
       stage.sizeToScene()
       stage.centerOnScreen()
 
     def avviaGioco(players: Seq[String], soldiers: Int): Unit =
-      enterGame(sessions.newMatch(players, soldiers, this))
+      enterGame(sessions.newMatch(players, soldiers, this), onlineMatch = false)
 
     def startShootingRange(): Unit =
-      enterGame(sessions.shootingRange(this))
+      enterGame(sessions.shootingRange(this), onlineMatch = false)
+
+    def closeEvents(): Unit =
+      eventsSubscription.foreach(_.close())
+      eventsSubscription = None
+
+    def connectEvents(user: OnlineAccount): Unit =
+      closeEvents()
+      eventsSubscription = Some(
+        online.subscribeEvents(
+          user,
+          event =>
+            Platform.runLater(() => {
+              if account.contains(user) then
+                event match
+                  case FriendsChanged() => refreshFriends()
+                  case DirectMessageEvent(dm) => menuView.onDirectMessage(dm)
+            })
+        )
+      )
 
     /** Reloads the friends list and pending requests from the server. */
     def refreshFriends(afterMessage: Option[String] = None): Unit =
@@ -123,6 +146,28 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
               case Failure(error) => menuView.showMessage(error.getMessage)
           })
 
+    def loadChatHistory(friend: String): Unit =
+      account.foreach: user =>
+        online.chatHistory(user, friend).onComplete: result =>
+          Platform.runLater(() => {
+            if account.contains(user) then
+              result match
+                case Success(messages) => menuView.showChatHistory(friend, messages)
+                case Failure(error: LoginExpired) => loginExpired(error)
+                case Failure(error) => menuView.showMessage(error.getMessage)
+          })
+
+    def sendDirectMessage(friend: String, text: String): Unit =
+      account.foreach: user =>
+        online.sendDirectMessage(user, friend, text).onComplete: result =>
+          Platform.runLater(() => {
+            if account.contains(user) then
+              result match
+                case Success(dm) => menuView.onDirectMessage(dm)
+                case Failure(error: LoginExpired) => loginExpired(error)
+                case Failure(error) => menuView.showMessage(error.getMessage)
+          })
+
     /** Waits for a login (or a registration followed by a login): if it works the user is logged in. */
     def awaitLogin(server: String, attempt: Future[OnlineAccount], welcome: String): Unit =
       menuView.setBusy(true)
@@ -138,6 +183,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
               menuView.showFriends(friendsState)
               menuView.showMessage(welcome)
               refreshFriends()
+              connectEvents(user)
             case Failure(error) => menuView.showMessage(error.getMessage)
         })
 
@@ -149,6 +195,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       awaitLogin(server, online.register(server, username, password).flatMap(_ => online.login(server, username, password)), "Account created")
 
     def logOut(): Unit =
+      closeEvents()
       account = None
       friendsState = FriendsSnapshot.Empty
       menuView.showLoggedOut()
@@ -166,7 +213,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
         Platform.runLater(() => {
           onlineView.setBusy(false)
           result match
-            case Success(session) => enterGame(session)
+            case Success(session) => enterGame(session, onlineMatch = true)
             case Failure(error: LoginExpired) => loginExpired(error)
             case Failure(error) => onlineView.showMessage(error.getMessage)
         })
@@ -199,6 +246,8 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       target => runFriendAction(online.sendFriendRequest(_, target), s"Friend request sent to $target"),
       from => runFriendAction(online.acceptFriendRequest(_, from), s"You and $from are now friends"),
       from => runFriendAction(online.declineFriendRequest(_, from), s"Declined request from $from"),
+      friend => loadChatHistory(friend),
+      (friend, text) => sendDirectMessage(friend, text),
       account,
       friendsState,
       lastServer
@@ -213,7 +262,9 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       resizable = false
       scene = menuScene
 
-    if account.isDefined then refreshFriends()
+    account.foreach: user =>
+      refreshFriends()
+      connectEvents(user)
 
   /**
    * Overrides the current scene to display the end-game screen.
@@ -376,3 +427,6 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
    */
   override def showError(message: String): Unit =
     Platform.runLater(() => gameView.showTemporaryError(message))
+
+  override def showChatMessage(sender: String, text: String): Unit =
+    Platform.runLater(() => gameView.addChatMessage(sender, text))
