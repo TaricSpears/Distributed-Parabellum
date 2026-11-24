@@ -78,11 +78,12 @@ class GameView(width: Double, height: Double) extends Pane:
 
   private val chatInput = new TextField:
     promptText = "Write a message..."
+    style = UiTheme.neonFieldCompact
     hgrow = Priority.Always
     onAction = _ => sendCurrentChat()
 
   private val chatSendButton = new Button("Send"):
-    style = "-fx-font-size: 11pt; -fx-font-weight: bold; -fx-cursor: hand;"
+    style = UiTheme.neonSmallButton
     onAction = _ => sendCurrentChat()
 
   private val chatInputRow = new HBox:
@@ -94,7 +95,7 @@ class GameView(width: Double, height: Double) extends Pane:
     spacing = 6
     padding = Insets(8)
     prefWidth = 270
-    style = "-fx-background-color: rgba(0, 0, 0, 0.72); -fx-background-radius: 8;"
+    style = UiTheme.neonPanel
     visible = false
     managed = false
     children = List[Node](chatScroll, chatInputRow)

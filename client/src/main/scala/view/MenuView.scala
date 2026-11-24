@@ -17,7 +17,8 @@ import scalafx.scene.image.{Image, ImageView}
  * to [[MapGenerator.MaxPlayers]]), customize their names and the number of soldiers per team.
  *
  * On the side there is the account of the user on a server: he logs in (or registers) here, and only
- * then he can play online. Once he is logged in, he can log out and manage his friends from here too.
+ * then he can play online. Once he is logged in, he can log out, manage friends, chat, and invite
+ * friends to matches directly from here.
  */
 class MenuView(
     onPlayClicked: (Seq[String], Int) => Unit,
@@ -32,6 +33,8 @@ class MenuView(
     onDeclineFriendRequest: String => Unit,
     onOpenFriendChat: String => Unit,
     onSendDirectMessage: (String, String) => Unit,
+    onInviteFriend: String => Unit,
+    onAcceptMatchInvite: String => Unit,
     account: Option[OnlineAccount],
     friends: FriendsSnapshot,
     server: String
@@ -47,8 +50,7 @@ class MenuView(
     fitHeight <== MenuView.this.height
     preserveRatio = false
 
-  private val rowLabelStyle = "-fx-text-fill: white; -fx-font-size: 16pt; -fx-font-weight: bold;"
-  private val buttonStyle = "-fx-font-size: 20pt; -fx-font-weight: bold; -fx-padding: 10 40 10 40; -fx-cursor: hand;"
+  private val rowLabelStyle = "-fx-text-fill: #e8f8ff; -fx-font-size: 14pt; -fx-font-weight: bold;"
   private val playerCounts = MapGenerator.MinPlayers to MapGenerator.MaxPlayers
 
   private var playerCount = MapGenerator.MinPlayers
@@ -56,14 +58,18 @@ class MenuView(
   private def textInput(startingText: String): TextField =
     new TextField:
       text = startingText
-      maxWidth = 200
+      style = UiTheme.neonField
+      prefWidth = 210
+      maxWidth = 210
 
   private def row(labelText: String, field: TextField): HBox =
     val rowLabel = new Label(labelText):
       style = rowLabelStyle
+      minWidth = 200
+      alignment = Pos.CenterRight
     new HBox:
       alignment = Pos.Center
-      spacing = 10
+      spacing = 12
       children = List[Node](rowLabel, field)
 
   // one input for every possible player: only the first `playerCount` rows are shown
@@ -76,13 +82,9 @@ class MenuView(
   private val soldiersInput = textInput("1")
   private val soldiersRow = row("Soldiers per player:", soldiersInput)
 
-  private def countStyle(count: Int): String =
-    val base = "-fx-font-size: 14pt; -fx-font-weight: bold; -fx-cursor: hand;"
-    if count == playerCount then s"$base -fx-background-color: #f0c040;" else base
-
   private def countButton(count: Int): Button =
     new Button(s"$count players"):
-      style = countStyle(count)
+      style = UiTheme.countButton(count == playerCount)
       onAction = _ => selectPlayerCount(count)
 
   private val countButtons: Vector[Button] = playerCounts.toVector.map(countButton)
@@ -93,7 +95,8 @@ class MenuView(
     children = countButtons
 
   private val playButton = new Button("Play"):
-    style = buttonStyle
+    style = UiTheme.neonPrimaryButton
+    minWidth = 240
     onAction = _ => {
       val names = PlayerNames.normalize(nameInputs.take(playerCount).map(_.text.value))
       val soldiersCount = soldiersInput.text.value.toIntOption.getOrElse(1).max(1)
@@ -101,11 +104,13 @@ class MenuView(
     }
 
   private val onlineButton = new Button("Play online"):
-    style = buttonStyle
+    style = UiTheme.neonAccentButton
+    minWidth = 240
     onAction = _ => onOnlineClicked()
 
   private val shootingRangeButton = new Button("Shooting range"):
-    style = buttonStyle
+    style = UiTheme.neonPrimaryButton
+    minWidth = 240
     onAction = _ => onShootingRangeClicked()
 
   private def layoutNodes: List[Node] =
@@ -113,28 +118,23 @@ class MenuView(
 
   private def selectPlayerCount(count: Int): Unit =
     playerCount = count
-    playerCounts.zip(countButtons).foreach((n, button) => button.style = countStyle(n))
+    playerCounts.zip(countButtons).foreach((n, button) => button.style = UiTheme.countButton(n == playerCount))
     menuLayout.children = layoutNodes
 
   private val menuLayout = new VBox:
     alignment = Pos.Center
-    spacing = 12
+    spacing = 11
     children = layoutNodes
 
   // ---------------------------------------------------------------- account & friends
 
-  private val panelStyle = "-fx-background-color: rgba(0, 0, 0, 0.65); -fx-background-radius: 12;"
-  private val panelTitleStyle = "-fx-text-fill: white; -fx-font-size: 16pt; -fx-font-weight: bold;"
-  private val sectionLabelStyle = "-fx-text-fill: #f0c040; -fx-font-size: 11pt; -fx-font-weight: bold;"
-  private val panelLabelStyle = "-fx-text-fill: white; -fx-font-size: 12pt; -fx-font-weight: bold;"
-  private val panelTextStyle = "-fx-text-fill: white; -fx-font-size: 12pt;"
-  private val mutedTextStyle = "-fx-text-fill: #cccccc; -fx-font-size: 11pt;"
-  private val panelButtonStyle = "-fx-font-size: 12pt; -fx-font-weight: bold; -fx-padding: 5 14 5 14; -fx-cursor: hand;"
-  private val smallButtonStyle = "-fx-font-size: 11pt; -fx-font-weight: bold; -fx-padding: 3 8 3 8; -fx-cursor: hand;"
-  private val acceptButtonStyle = s"$smallButtonStyle -fx-background-color: #4caf50; -fx-text-fill: white;"
-  private val declineButtonStyle = s"$smallButtonStyle -fx-background-color: #e53935; -fx-text-fill: white;"
-  private val messageStyle = "-fx-text-fill: #ffd54f; -fx-font-size: 11pt; -fx-font-weight: bold;"
-  private val panelWidth = 264
+  private val panelTitleStyle = "-fx-text-fill: #00e5ff; -fx-font-size: 15pt; -fx-font-weight: bold;"
+  private val sectionLabelStyle = "-fx-text-fill: #ffd54f; -fx-font-size: 11pt; -fx-font-weight: bold;"
+  private val panelLabelStyle = "-fx-text-fill: #e8f8ff; -fx-font-size: 11.5pt; -fx-font-weight: bold;"
+  private val panelTextStyle = "-fx-text-fill: #e8f8ff; -fx-font-size: 11.5pt;"
+  private val mutedTextStyle = "-fx-text-fill: #8aa4b8; -fx-font-size: 10.5pt;"
+  private val messageStyle = "-fx-text-fill: #ffd54f; -fx-font-size: 10.5pt; -fx-font-weight: bold;"
+  private val panelWidth = 276
   private val fieldWidth = panelWidth - 28
 
   private def spacer(): Region =
@@ -143,10 +143,15 @@ class MenuView(
 
   private val serverField = new TextField:
     text = server
+    style = UiTheme.neonFieldCompact
     maxWidth = fieldWidth
   private val usernameField = new TextField:
+    promptText = "username"
+    style = UiTheme.neonFieldCompact
     maxWidth = fieldWidth
   private val passwordField = new PasswordField:
+    promptText = "password"
+    style = UiTheme.neonFieldCompact
     maxWidth = fieldWidth
     onAction = _ => loginPressed()
 
@@ -158,15 +163,15 @@ class MenuView(
     managed = false
 
   private val loginButton = new Button("Login"):
-    style = panelButtonStyle
+    style = UiTheme.neonPanelButton
     onAction = _ => loginPressed()
 
   private val registerButton = new Button("Register"):
-    style = panelButtonStyle
+    style = UiTheme.neonPanelButton
     onAction = _ => registerPressed()
 
   private val logoutButton = new Button("Logout"):
-    style = smallButtonStyle
+    style = UiTheme.neonSmallButton
     onAction = _ => onLogout()
 
   private val loggedInUserLabel = new Label(""):
@@ -177,15 +182,16 @@ class MenuView(
 
   private val addFriendField = new TextField:
     promptText = "Add friend..."
+    style = UiTheme.neonFieldCompact
     hgrow = Priority.Always
     onAction = _ => addFriendPressed()
 
   private val addFriendButton = new Button("Add"):
-    style = smallButtonStyle
+    style = UiTheme.neonSmallButton
     onAction = _ => addFriendPressed()
 
   private val refreshFriendsButton = new Button("↻"):
-    style = smallButtonStyle
+    style = UiTheme.neonSmallButton
     tooltip = Tooltip("Refresh friends")
     onAction = _ => onRefreshFriends()
 
@@ -195,13 +201,55 @@ class MenuView(
   private val friendsScroll = new ScrollPane:
     content = friendsListBox
     fitToWidth = true
-    maxHeight = 280
+    maxHeight = 250
     hbarPolicy = ScrollBarPolicy.Never
     style = "-fx-background: transparent; -fx-background-color: transparent;"
 
+  // incoming match invitation banner (shown when a friend invites you)
+  private var pendingInviteMatchId: Option[String] = None
+
+  private val inviteLabel = new Label(""):
+    style = "-fx-text-fill: #ffe8f0; -fx-font-size: 11pt; -fx-font-weight: bold;"
+    wrapText = true
+
+  private val joinInviteButton = new Button("Join"):
+    style = UiTheme.neonAcceptButton
+    onAction = _ =>
+      pendingInviteMatchId.foreach: matchId =>
+        dismissInvite()
+        onAcceptMatchInvite(matchId)
+
+  private val dismissInviteButton = new Button("✗"):
+    style = UiTheme.neonDeclineButton
+    onAction = _ => dismissInvite()
+
+  private val inviteButtons = new HBox:
+    spacing = 6
+    children = List[Node](joinInviteButton, dismissInviteButton)
+
+  private val inviteCard = new VBox:
+    spacing = 6
+    padding = Insets(8)
+    style = UiTheme.neonInviteCard
+    visible = false
+    managed = false
+    children = List[Node](inviteLabel, inviteButtons)
+
+  private def dismissInvite(): Unit =
+    pendingInviteMatchId = None
+    inviteCard.visible = false
+    inviteCard.managed = false
+
+  /** Displays a glowing match invitation card from a friend. */
+  def showMatchInvite(from: String, matchId: String): Unit =
+    pendingInviteMatchId = Some(matchId)
+    inviteLabel.text = s"⚔ $from invited you to a match!"
+    inviteCard.visible = true
+    inviteCard.managed = true
+
   private def field(labelText: String, input: TextInputControl): VBox =
     new VBox:
-      spacing = 2
+      spacing = 3
       children = List[Node](new Label(labelText) { style = panelLabelStyle }, input)
 
   private val panelTitle = new Label("Account"):
@@ -248,7 +296,7 @@ class MenuView(
   private var unreadByFriend: Map[String, Int] = Map.empty
 
   private val chatBackButton = new Button("←"):
-    style = smallButtonStyle
+    style = UiTheme.neonSmallButton
     tooltip = Tooltip("Back to friends")
     onAction = _ => closeFriendChat()
 
@@ -267,18 +315,19 @@ class MenuView(
   private val friendChatScroll = new ScrollPane:
     content = friendChatBox
     fitToWidth = true
-    prefHeight = 240
-    maxHeight = 240
+    prefHeight = 225
+    maxHeight = 225
     hbarPolicy = ScrollBarPolicy.Never
     style = "-fx-background: transparent; -fx-background-color: transparent;"
 
   private val friendChatInput = new TextField:
     promptText = "Message..."
+    style = UiTheme.neonFieldCompact
     hgrow = Priority.Always
     onAction = _ => sendFriendMessagePressed()
 
   private val friendChatSendButton = new Button("Send"):
-    style = smallButtonStyle
+    style = UiTheme.neonSmallButton
     onAction = _ => sendFriendMessagePressed()
 
   private val friendChatInputRow = new HBox:
@@ -288,6 +337,7 @@ class MenuView(
 
   private val loggedInNodes: List[Node] = List(
     loggedInHeader,
+    inviteCard,
     friendsHeader,
     addFriendRow,
     messageLabel,
@@ -296,6 +346,7 @@ class MenuView(
 
   private val friendChatNodes: List[Node] = List(
     loggedInHeader,
+    inviteCard,
     chatHeader,
     messageLabel,
     friendChatScroll,
@@ -303,10 +354,10 @@ class MenuView(
   )
 
   private val accountPanel = new VBox:
-    spacing = 10
+    spacing = 9
     padding = Insets(14)
     alignment = Pos.TopLeft
-    style = panelStyle
+    style = UiTheme.neonPanel
     prefWidth = panelWidth
     maxWidth = panelWidth
     maxHeight = Region.USE_PREF_SIZE
@@ -342,11 +393,11 @@ class MenuView(
 
   private def incomingRow(from: String): HBox =
     val accept = new Button("✓"):
-      style = acceptButtonStyle
+      style = UiTheme.neonAcceptButton
       tooltip = Tooltip(s"Accept $from")
       onAction = _ => onAcceptFriendRequest(from)
     val decline = new Button("✗"):
-      style = declineButtonStyle
+      style = UiTheme.neonDeclineButton
       tooltip = Tooltip(s"Decline $from")
       onAction = _ => onDeclineFriendRequest(from)
     new HBox:
@@ -361,10 +412,12 @@ class MenuView(
 
   private def friendRow(name: String): HBox =
     val unread = unreadByFriend.getOrElse(name, 0)
+    val inviteBtn = new Button("⚔"):
+      style = UiTheme.neonInviteButton
+      tooltip = Tooltip(s"Invite $name to a match")
+      onAction = _ => onInviteFriend(name)
     val chatBtn = new Button(if unread > 0 then s"💬 ($unread)" else "💬"):
-      style =
-        if unread > 0 then s"$smallButtonStyle -fx-background-color: #f0c040; -fx-text-fill: black;"
-        else smallButtonStyle
+      style = if unread > 0 then UiTheme.neonBadgeButton else UiTheme.neonSmallButton
       tooltip = Tooltip(s"Chat with $name")
       onAction = _ => openFriendChat(name)
     new HBox:
@@ -373,6 +426,7 @@ class MenuView(
       children = List[Node](
         new Label(name) { style = panelTextStyle },
         spacer(),
+        inviteBtn,
         chatBtn
       )
 
@@ -401,7 +455,7 @@ class MenuView(
   private def messageNode(dm: DirectMessage): Label =
     val isMine = dm.from == loggedInUserLabel.text.value
     new Label(if isMine then s"You: ${dm.text}" else s"${dm.from}: ${dm.text}"):
-      style = if isMine then "-fx-text-fill: #80d8ff; -fx-font-size: 11pt;" else "-fx-text-fill: white; -fx-font-size: 11pt;"
+      style = if isMine then "-fx-text-fill: #80d8ff; -fx-font-size: 11pt;" else "-fx-text-fill: #e8f8ff; -fx-font-size: 11pt;"
       wrapText = true
       maxWidth = fieldWidth - 16
 
@@ -463,6 +517,7 @@ class MenuView(
   def showLoggedOut(): Unit =
     activeChatFriend = None
     unreadByFriend = Map.empty
+    dismissInvite()
     showFriends(FriendsSnapshot.Empty)
     accountPanel.children = loggedOutNodes
     onlineButton.disable = true

@@ -1,7 +1,7 @@
 package it.unibo.parabellum
 package view
 
-import protocol.{DirectMessageEvent, FriendsChanged, FriendsSnapshot, UserEvent}
+import protocol.{DirectMessageEvent, FriendsChanged, FriendsSnapshot, MatchInviteEvent, UserEvent}
 import session.{GameSession, LoginExpired, OnlineAccount, OnlineSessions, SessionFactory}
 import snapshot.{CircleSnapshot, GameSnapshot, ObstacleSnapshot, PolygonSnapshot, PowerUpSnapshot, ShapeSnapshot}
 import util.BoundingBox
@@ -39,6 +39,9 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
 
   /** The match the user is playing, if any. */
   private var currentSession: Option[GameSession] = None
+
+  /** Whether the current match is played online. */
+  private var currentMatchIsOnline: Boolean = false
 
   /** The user that is logged in on a server, if any: he stays logged in between the matches. */
   private var account: Option[OnlineAccount] = None
@@ -89,6 +92,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
     /** Shows the battlefield and plays the session. */
     def enterGame(session: GameSession, onlineMatch: Boolean): Unit =
       currentSession = Some(session)
+      currentMatchIsOnline = onlineMatch
       gameView.setChatEnabled(onlineMatch, text => currentSession.foreach(_.sendChat(text)))
       stage.scene = gameScene
       stage.sizeToScene()
@@ -115,6 +119,7 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
                 event match
                   case FriendsChanged() => refreshFriends()
                   case DirectMessageEvent(dm) => menuView.onDirectMessage(dm)
+                  case MatchInviteEvent(from, matchId) => menuView.showMatchInvite(from, matchId)
             })
         )
       )
@@ -166,6 +171,37 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
                 case Success(dm) => menuView.onDirectMessage(dm)
                 case Failure(error: LoginExpired) => loginExpired(error)
                 case Failure(error) => menuView.showMessage(error.getMessage)
+          })
+
+    /** Creates a quick 1v1 match with a friend, sends them a real-time invite, and enters the match. */
+    def inviteFriendToMatch(friend: String): Unit =
+      account.foreach: user =>
+        val matchId = s"duel-${System.currentTimeMillis() % 1000000}"
+        menuView.setBusy(true)
+        online
+          .create(user, matchId, Seq(friend), 1, this)
+          .onComplete: result =>
+            Platform.runLater(() => {
+              menuView.setBusy(false)
+              result match
+                case Success(session) =>
+                  online.inviteToMatch(user, friend, matchId)
+                  enterGame(session, onlineMatch = true)
+                case Failure(error: LoginExpired) => loginExpired(error)
+                case Failure(error) => menuView.showMessage(error.getMessage)
+            })
+
+    /** Joins a match directly from a friend's real-time invitation. */
+    def acceptMatchInvite(matchId: String): Unit =
+      account.foreach: user =>
+        menuView.setBusy(true)
+        online.join(user, matchId, this).onComplete: result =>
+          Platform.runLater(() => {
+            menuView.setBusy(false)
+            result match
+              case Success(session) => enterGame(session, onlineMatch = true)
+              case Failure(error: LoginExpired) => loginExpired(error)
+              case Failure(error) => menuView.showMessage(error.getMessage)
           })
 
     /** Waits for a login (or a registration followed by a login): if it works the user is logged in. */
@@ -225,7 +261,11 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
           user,
           friendsState.friends,
           matchId => playOnline(onlineView, online.join(user, matchId, this)),
-          (matchId, others, soldiers) => playOnline(onlineView, online.create(user, matchId, others, soldiers, this)),
+          (matchId, others, soldiers) => {
+            val created = online.create(user, matchId, others, soldiers, this)
+            created.foreach(_ => others.filter(friendsState.friends.contains).foreach(online.inviteToMatch(user, _, matchId)))
+            playOnline(onlineView, created)
+          },
           () => {
             stage.scene = menuScene
             refreshFriends()
@@ -248,6 +288,8 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
       from => runFriendAction(online.declineFriendRequest(_, from), s"Declined request from $from"),
       friend => loadChatHistory(friend),
       (friend, text) => sendDirectMessage(friend, text),
+      friend => inviteFriendToMatch(friend),
+      matchId => acceptMatchInvite(matchId),
       account,
       friendsState,
       lastServer
@@ -273,7 +315,8 @@ class MainGUI(width: Double, height: Double, sessions: SessionFactory, online: O
    */
   override def showEndGame(winner: String): Unit =
     Platform.runLater(() => {
-      val winnerPane = new EndGameView(() => restartGame(), height, width, winner)
+      val localPlayer = Option.when(currentMatchIsOnline)(account.map(_.username)).flatten
+      val winnerPane = new EndGameView(() => restartGame(), height, width, winner, localPlayer)
       val winnerScene = new Scene:
         root = winnerPane
 

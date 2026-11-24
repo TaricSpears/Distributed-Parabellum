@@ -24,7 +24,7 @@ class ControlPanelView(onShoot: (String, Direction) => Unit, quitAction: () => U
 
   padding = Insets(15)
   spacing = 20
-  style = "-fx-background-color: #222222;"
+  style = "-fx-background-color: #0b1220; -fx-border-color: #00e5ff; -fx-border-width: 1.5 0 0 0;"
   alignment = Pos.Center
 
   private var direction: Direction = Direction.Positive
@@ -43,16 +43,16 @@ class ControlPanelView(onShoot: (String, Direction) => Unit, quitAction: () => U
     style = "-fx-font-size: 16px; -fx-font-weight: bold;"
 
   private val directionButton = new Button(s"Direction: ${arrow(Direction.Positive)}"):
-    style = "-fx-cursor: hand; -fx-font-weight: bold; -fx-font-size: 14px;"
+    style = UiTheme.neonPanelButton
     onAction = (ae: ActionEvent) => setDirection(flip(direction))
 
   private val inputField = new TextField:
     promptText = "e.g. sin(x + 2) * 30"
     prefWidth = 300
-    style = "-fx-font-size: 14px;"
+    style = UiTheme.neonFieldCompact
 
   private val shootButton = new Button("Shoot"):
-    style = "-fx-cursor: hand; -fx-font-weight: bold; -fx-font-size: 14px;"
+    style = UiTheme.neonPanelButton.replace("#00e5ff", "#ff2a6d").replace("rgba(10, 22, 36", "rgba(36, 10, 24")
     onAction = (ae: ActionEvent) => {
       onShoot(inputField.text.value, direction)
       // Opzionale: svuota il campo dopo aver sparato
@@ -60,8 +60,7 @@ class ControlPanelView(onShoot: (String, Direction) => Unit, quitAction: () => U
     }
 
   private val quitButton = new Button("Quit"):
-    style = "-fx-cursor: hand; -fx-font-weight: bold; -fx-font-size: 14px;"
-
+    style = UiTheme.neonPanelButton
     onAction = (ae: ActionEvent) => quitAction()
 
   children = List(quitButton, spacer, turnLabel, directionButton, inputField, shootButton)
